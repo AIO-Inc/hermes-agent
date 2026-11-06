@@ -91,7 +91,7 @@ def _completed_subscription(**sub_kwargs):
         # "notify" default would never reach the wake path under test.
         sub_kwargs.setdefault("delivery_mode", "notify+wake")
         kbn.add_notify_sub(conn, task_id=tid, **sub_kwargs)
-        kb.complete_task(conn, tid, summary="done")
+        kb.complete_task(conn, tid, summary="done", bypass_receipt=True)
         return tid
     finally:
         conn.close()

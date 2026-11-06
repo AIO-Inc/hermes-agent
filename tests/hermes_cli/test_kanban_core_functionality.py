@@ -158,7 +158,7 @@ def test_notify_claim_is_single_owner_and_rewindable(kanban_home):
         # New subs start caught up at the task's current MAX(task_events.id)
         # (the `created` event) — issue #29905.
         initial_cursor = int(kbn.list_notify_subs(conn1, tid)[0]["last_event_id"])
-        kb.complete_task(conn1, tid, result="ok")
+        kb.complete_task(conn1, tid, result="ok", bypass_receipt=True)
 
         old_cursor, claimed_cursor, events = kbn.claim_unseen_events_for_sub(
             conn1,
@@ -473,7 +473,7 @@ def test_migration_backfills_inflight_run_for_legacy_db(kanban_home):
             assert task.current_run_id == runs[0].id
 
             # Subsequent complete closes the backfilled run cleanly.
-            kb.complete_task(conn2, tid, result="done", summary="ok")
+            kb.complete_task(conn2, tid, result="done", summary="ok", bypass_receipt=True)
             r = kb.latest_run(conn2, tid)
             assert r.outcome == "completed"
             assert r.summary == "ok"
@@ -1058,16 +1058,14 @@ def test_complete_can_retry_after_phantom_rejection(kanban_home):
             kb.complete_task(
                 conn, parent_a,
                 summary="oops",
-                created_cards=["t_phantomdeadbeef"],
-            )
+                created_cards=["t_phantomdeadbeef"], bypass_receipt=True)
         assert kb.get_task(conn, parent_a).status == "running"
 
         # Retry with [] (escape hatch): gate is skipped, completion lands.
         ok = kb.complete_task(
             conn, parent_a,
             summary="retry without claims",
-            created_cards=[],
-        )
+            created_cards=[], bypass_receipt=True)
         assert ok is True
         assert kb.get_task(conn, parent_a).status == "done"
 
@@ -1077,15 +1075,13 @@ def test_complete_can_retry_after_phantom_rejection(kanban_home):
             kb.complete_task(
                 conn, parent_b,
                 summary="oops",
-                created_cards=[real, "t_anotherphantom"],
-            )
+                created_cards=[real, "t_anotherphantom"], bypass_receipt=True)
         assert kb.get_task(conn, parent_b).status == "running"
 
         ok = kb.complete_task(
             conn, parent_b,
             summary="retry with corrected list",
-            created_cards=[real],
-        )
+            created_cards=[real], bypass_receipt=True)
         assert ok is True
         assert kb.get_task(conn, parent_b).status == "done"
 
@@ -1306,7 +1302,7 @@ def test_notify_sub_starts_caught_up_on_active_task(kanban_home):
     try:
         tid = kb.create_task(conn, title="old task", assignee="w")
         # Historical terminal activity BEFORE anyone subscribes.
-        kb.complete_task(conn, tid, result="done long ago")
+        kb.complete_task(conn, tid, result="done long ago", bypass_receipt=True)
 
         kbn.add_notify_sub(conn, task_id=tid, platform="telegram", chat_id="123")
         sub = kbn.list_notify_subs(conn, tid)[0]

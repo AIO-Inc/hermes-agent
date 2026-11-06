@@ -81,7 +81,7 @@ def _create_completed_subscription(platform, chat_id, session_id=None):
             conn, title="notify once", assignee="worker", session_id=session_id,
         )
         kbn.add_notify_sub(conn, task_id=tid, platform=platform, chat_id=chat_id)
-        kb.complete_task(conn, tid, summary="done once")
+        kb.complete_task(conn, tid, summary="done once", bypass_receipt=True)
         return tid
     finally:
         conn.close()
@@ -164,7 +164,7 @@ def test_apiserver_subscriptions_have_independent_wake_destinations(
                 platform="api_server",
                 chat_id=chat_id,
             )
-        kb.complete_task(conn, tid, summary="done once")
+        kb.complete_task(conn, tid, summary="done once", bypass_receipt=True)
     finally:
         conn.close()
 

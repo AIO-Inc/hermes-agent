@@ -54,7 +54,7 @@ def completion(*, profile="yuki", metadata=None, chat="post", thread="post",
                            notifier_profile=profile, delivery_mode=mode,
                            delivery_metadata=metadata if metadata is not None else
                            {"guild_id": "guild", "scope_id": "guild", "parent_chat_id": "parent"})
-        kb.complete_task(conn, task, result="finished")
+        kb.complete_task(conn, task, result="finished", bypass_receipt=True)
     return task
 
 

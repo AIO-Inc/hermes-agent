@@ -176,7 +176,7 @@ def test_list_filters_tasks(monkeypatch, worker_env):
 def test_complete_happy_path(worker_env):
     from tools import kanban_tools as kt
     out = kt._handle_complete({
-        "summary": "got the thing done",
+        "summary": "got the thing done (commit abc1234)",
         "metadata": {"files": 2},
     })
     d = json.loads(out)
@@ -189,7 +189,7 @@ def test_complete_happy_path(worker_env):
     try:
         run = kb.latest_run(conn, worker_env)
         assert run.outcome == "completed"
-        assert run.summary == "got the thing done"
+        assert run.summary == "got the thing done (commit abc1234)"
         assert run.metadata == {"files": 2}
     finally:
         conn.close()
@@ -212,7 +212,7 @@ def test_complete_retry_with_empty_created_cards_succeeds(worker_env):
 
     # Retry with the escape hatch.
     ok = json.loads(kt._handle_complete({
-        "summary": "retry without claims",
+        "summary": "retry without claims (commit abc1234)",
         "created_cards": [],
     }))
     assert ok.get("ok") is True
@@ -243,7 +243,7 @@ def test_complete_reports_registered_attachments(worker_env):
     artifact.write_bytes(b"{}")
 
     out = kt._handle_complete({
-        "summary": "done",
+        "summary": "done (commit abc1234)",
         "artifacts": [str(artifact)],
     })
     d = json.loads(out)
@@ -331,7 +331,7 @@ def test_unbound_worker_cannot_mutate_card(monkeypatch, worker_env):
     with kbc.connect() as conn:
         run_id = kb.get_task(conn, worker_env).current_run_id
     monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
-    out = json.loads(kt._handle_complete({"summary": "bound worker done"}))
+    out = json.loads(kt._handle_complete({"summary": "bound worker done (commit abc1234)"}))
     assert out.get("ok") is True
     with kbc.connect() as conn:
         assert kb.get_task(conn, worker_env).status == "done"
@@ -884,7 +884,7 @@ def test_worker_lifecycle_through_tools(worker_env):
 
     # 5. complete with structured handoff
     comp = json.loads(kt._handle_complete({
-        "summary": "implemented + spawned QA follow-up",
+        "summary": "implemented + spawned QA follow-up (commit abc1234)",
         "metadata": {"child_task": child_out["task_id"]},
     }))
     assert comp["ok"]
@@ -1055,7 +1055,7 @@ def test_orchestrator_complete_any_task_allowed(monkeypatch, tmp_path):
         conn.close()
 
     from tools import kanban_tools as kt
-    out = kt._handle_complete({"task_id": tid, "summary": "orchestrator close"})
+    out = kt._handle_complete({"task_id": tid, "summary": "orchestrator close (commit abc1234)"})
     d = json.loads(out)
     assert d.get("ok") is True and d.get("task_id") == tid
 

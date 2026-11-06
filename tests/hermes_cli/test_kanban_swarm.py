@@ -229,8 +229,7 @@ def test_swarm_verifier_and_synthesis_are_dependency_gated(tmp_path):
             conn,
             created.worker_ids[0],
             summary="A done",
-            metadata={"confidence": 0.8},
-        )
+            metadata={"confidence": 0.8}, bypass_receipt=True)
         kb.recompute_ready(conn)
         verifier = kb.get_task(conn, created.verifier_id)
         synthesizer = kb.get_task(conn, created.synthesizer_id)
@@ -239,7 +238,7 @@ def test_swarm_verifier_and_synthesis_are_dependency_gated(tmp_path):
         assert verifier.status == "todo"
         assert synthesizer.status == "todo"
 
-        kb.complete_task(conn, created.worker_ids[1], summary="B done")
+        kb.complete_task(conn, created.worker_ids[1], summary="B done", bypass_receipt=True)
         kb.recompute_ready(conn)
         verifier = kb.get_task(conn, created.verifier_id)
         synthesizer = kb.get_task(conn, created.synthesizer_id)
@@ -252,8 +251,7 @@ def test_swarm_verifier_and_synthesis_are_dependency_gated(tmp_path):
             conn,
             created.verifier_id,
             summary="Verified both branches",
-            metadata={"gate": "pass"},
-        )
+            metadata={"gate": "pass"}, bypass_receipt=True)
         kb.recompute_ready(conn)
         synthesizer = kb.get_task(conn, created.synthesizer_id)
         assert synthesizer is not None

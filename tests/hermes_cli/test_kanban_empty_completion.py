@@ -56,7 +56,7 @@ def test_whitespace_stored_result_does_not_count(conn):
     conn.commit()
     with pytest.raises(kb.EmptyCompletionError):
         kb.complete_task(conn, tid)
-    assert kb.complete_task(conn, tid, result="shipped the gate") is True
+    assert kb.complete_task(conn, tid, result="shipped the gate (commit abc1234)") is True
     assert conn.execute("SELECT status FROM tasks WHERE id = ?", (tid,)).fetchone()["status"] == "done"
 
 
@@ -73,5 +73,5 @@ def test_reject_then_succeed(conn):
     tid = _ready_task(conn)
     with pytest.raises(kb.EmptyCompletionError):
         kb.complete_task(conn, tid, summary="   ")
-    assert kb.complete_task(conn, tid, summary="fixed empty complete") is True
+    assert kb.complete_task(conn, tid, summary="fixed empty complete; CI green") is True
     assert conn.execute("SELECT status FROM tasks WHERE id = ?", (tid,)).fetchone()["status"] == "done"

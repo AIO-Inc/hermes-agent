@@ -784,6 +784,26 @@ def _handle_complete(args: dict, **kw) -> str:
                 f"kanban_complete blocked: {empty_err}. Your task is still in-flight (no state "
                 f"change). Retry kanban_complete with a non-empty summary or result describing "
                 f"what was done.")
+        except kb.MissingReceiptError as receipt_err:
+            # Same shape as the empty-completion gate: nothing was mutated, the
+            # audit event already landed; the worker retries with a verifiable
+            # receipt instead of stalling. Spell the expected markers out so the
+            # model doesn't treat a tool_error as a terminal failure.
+            return tool_error(
+                f"kanban_complete blocked: {receipt_err}. Your task is still in-flight (no state "
+                f"change). Retry kanban_complete with verifiable evidence in the summary/result: "
+                f"a URL, transaction hash (0x...), commit SHA, test/CI output (e.g. '12 passed' or "
+                f"'CI green'), a diff, or a packet_hash/'verified by' reference.")
+        except kb.MissingProvenanceError as prov_err:
+            # C-13 presence gate (enforced mode only): nothing was mutated, the
+            # audit event landed; the worker retries with a provenance block
+            # rather than stalling. Spell the required block out so the model
+            # doesn't treat a tool_error as a terminal failure.
+            return tool_error(
+                f"kanban_complete blocked: {prov_err}. Your task is still in-flight (no state "
+                f"change). Retry kanban_complete with a provenance block in the summary/result: "
+                f"Score + Choice (the selected option vs >=2 considered alternatives, one of "
+                f"which is do-nothing) + the alternatives considered.")
         task = kb.get_task(conn, tid)
         if not ok:
             # complete_task reports every refusal as bare False; a reopened or

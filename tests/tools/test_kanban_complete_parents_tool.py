@@ -30,7 +30,7 @@ def running_child_with_parent(monkeypatch, tmp_path):
     conn = kbc.connect()
     try:
         parent_id = kb.create_task(conn, title="parent gate", assignee="op")
-        assert kb.complete_task(conn, parent_id, result="parent shipped")
+        assert kb.complete_task(conn, parent_id, result="parent shipped", bypass_receipt=True)
         child_id = kb.create_task(
             conn, title="child work", assignee="test-worker", parents=[parent_id])
         assert kb.claim_task(conn, child_id) is not None

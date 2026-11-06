@@ -62,7 +62,7 @@ def _create_completed_task(*, subscribe: bool) -> str:
         tid = kb.create_task(conn, title="owner gate", assignee="worker")
         if subscribe:
             kbn.add_notify_sub(conn, task_id=tid, platform="telegram", chat_id="chat-1")
-        kb.complete_task(conn, tid, summary="done")
+        kb.complete_task(conn, tid, summary="done", bypass_receipt=True)
         return tid
     finally:
         conn.close()

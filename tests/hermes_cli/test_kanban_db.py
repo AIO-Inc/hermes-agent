@@ -690,7 +690,7 @@ def test_delete_archived_task_removes_related_rows(kanban_home):
         tid = kb.create_task(conn, title="child", parents=[parent], assignee="worker")
         kb.add_comment(conn, tid, "user", "cleanup me")
         kb.claim_task(conn, tid)
-        kb.complete_task(conn, tid, result="done")
+        kb.complete_task(conn, tid, result="done", bypass_receipt=True)
         assert kb.archive_task(conn, tid)
         conn.execute(
             "INSERT INTO kanban_notify_subs(task_id, platform, chat_id, thread_id, user_id, created_at, last_event_id) "
@@ -825,8 +825,7 @@ def test_complete_task_persists_scratch_artifacts_before_cleanup(kanban_home):
             conn,
             t,
             result="ok",
-            metadata={"artifacts": [str(artifact)]},
-        )
+            metadata={"artifacts": [str(artifact)]}, bypass_receipt=True)
 
         completed = [e for e in kb.list_events(conn, t) if e.kind == "completed"][-1]
         persisted = Path(completed.payload["artifacts"][0])
@@ -864,7 +863,7 @@ def test_review_bound_handoff_preserves_declared_artifacts(kanban_home):
             conn, t, summary="ready for review",
             metadata={"artifacts": [str(artifact)]}, expected_run_id=run_id)
         handoff = [e for e in kb.list_events(conn, t) if e.kind == "review_requested"][-1]
-        assert kb.complete_task(conn, t, summary="approved")
+        assert kb.complete_task(conn, t, summary="approved", bypass_receipt=True)
         attachments = kb.list_attachments(conn, t)
     persisted = Path(handoff.payload["artifacts"][0])
     assert not ws.exists(), "scratch workspace should still be cleaned up"
@@ -931,10 +930,10 @@ def test_dir_child_completion_unblocks_deferred_scratch_parent(kanban_home, tmp_
         parent_ws = kbw.resolve_workspace(p_task)
         kbw.set_workspace_path(conn, parent, parent_ws)
 
-        kb.complete_task(conn, parent, result="handoff")
+        kb.complete_task(conn, parent, result="handoff", bypass_receipt=True)
         assert parent_ws.exists(), "deferred while dir child active"
 
-        kb.complete_task(conn, child, result="built")
+        kb.complete_task(conn, child, result="built", bypass_receipt=True)
 
     assert not parent_ws.exists(), (
         "A 'dir' child completing must trigger the parent scratch sweep"
@@ -1005,7 +1004,7 @@ def test_symlinked_workspaces_root_does_not_widen_scratch_cleanup(kanban_home, t
         # Legacy explicit-path scratch task pointing straight at user data.
         t = kb.create_task(conn, title="scratch")
         kbw.set_workspace_path(conn, t, victim)
-        assert kb.complete_task(conn, t, result="done")
+        assert kb.complete_task(conn, t, result="done", bypass_receipt=True)
     assert (victim / "keep.txt").is_file()
 
 
@@ -1398,7 +1397,7 @@ def test_link_tasks_no_dependency_wait_when_parent_done(kanban_home):
     """A done parent demotes nothing and reports no gate."""
     with kbc.connect() as conn:
         parent = kb.create_task(conn, title="done parent")
-        kb.complete_task(conn, parent, result="done")
+        kb.complete_task(conn, parent, result="done", bypass_receipt=True)
         child = kb.create_task(conn, title="follower")
 
         gated = kb.link_tasks(conn, parent, child)
@@ -1454,7 +1453,7 @@ def test_unlink_tasks_triggers_recompute_ready(kanban_home):
     with kbc.connect() as conn:
         # A is done.
         a = kb.create_task(conn, title="parent-done")
-        kb.complete_task(conn, a, result="done")
+        kb.complete_task(conn, a, result="done", bypass_receipt=True)
 
         # C is running (not done) — blocks child B.
         c = kb.create_task(conn, title="parent-running")

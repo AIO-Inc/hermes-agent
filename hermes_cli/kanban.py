@@ -921,7 +921,9 @@ def _cmd_complete(args: argparse.Namespace) -> int:
             try:
                 done = kb.complete_task(conn, tid, result=args.result, summary=summary, metadata=metadata,
                                         expected_run_id=_worker_run_id_for(tid),
-                                        force=bool(getattr(args, "force", False)))
+                                        force=bool(getattr(args, "force", False)),
+                                        bypass_receipt=bool(getattr(args, "bypass_receipt", False)),
+                                        bypass_provenance=bool(getattr(args, "bypass_provenance", False)))
             except kb.LiveClaimError:
                 fail_msg[tid] = (f"cannot complete {tid}: a live worker is running it. Wait for the "
                                  f"worker, `hermes kanban reclaim {tid}` to release it, or re-run with "
@@ -930,6 +932,12 @@ def _cmd_complete(args: argparse.Namespace) -> int:
             except kb.EmptyCompletionError as empty_err:
                 fail_msg[tid] = (f"cannot complete {tid}: {empty_err}. Pass --result/--summary "
                                  f"describing what was done (an empty completion is not evidence).")
+                return False
+            except kb.MissingReceiptError as receipt_err:
+                fail_msg[tid] = f"cannot complete {tid}: {receipt_err}"
+                return False
+            except kb.MissingProvenanceError as prov_err:
+                fail_msg[tid] = f"cannot complete {tid}: {prov_err}"
                 return False
             if not done:
                 # complete_task returns bare False for a dependency refusal too;

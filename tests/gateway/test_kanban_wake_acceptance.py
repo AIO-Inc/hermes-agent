@@ -105,7 +105,7 @@ async def test_notifier_retries_unaccepted_wake_without_repeating_pings(tmp_path
             tid = kb.create_task(conn, title=mode, assignee="worker", session_id=key)
             kbn.add_notify_sub(conn, task_id=tid, platform="telegram", chat_id="42",
                                user_id="42", chat_type="dm", delivery_mode=mode)
-            kb.complete_task(conn, tid, summary="handoff")
+            kb.complete_task(conn, tid, summary="handoff", bypass_receipt=True)
             tids[mode] = tid
     finally:
         conn.close()

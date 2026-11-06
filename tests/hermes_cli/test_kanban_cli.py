@@ -102,7 +102,7 @@ def test_kanban_show_text_renders_graph_with_open_connection(kanban_home):
 def test_kanban_show_text_renders_legacy_iso_completed_at(kanban_home):
     with kbc.connect_closing() as conn:
         task_id = kb.create_task(conn, title="legacy stamp")
-        kb.complete_task(conn, task_id, result="ok", force=True)
+        kb.complete_task(conn, task_id, result="ok", force=True, bypass_receipt=True)
         conn.execute("UPDATE tasks SET completed_at = '2026-09-30T14:22:11' WHERE id = ?", (task_id,))
         conn.commit()
 
@@ -121,7 +121,7 @@ def test_show_survives_iso_strings_in_integer_timestamp_columns(kanban_home):
     with kbc.connect_closing() as conn:
         task_id = kb.create_task(conn, title="corrupted card", assignee="alice")
         assert kb.claim_task(conn, task_id)
-        assert kb.complete_task(conn, task_id, summary="done")
+        assert kb.complete_task(conn, task_id, summary="done", bypass_receipt=True)
         conn.execute("UPDATE task_runs SET ended_at = ? WHERE task_id = ?", (iso_utc, task_id))
         conn.execute("UPDATE tasks SET completed_at = ? WHERE id = ?", (iso_z, task_id))
         conn.execute("UPDATE task_events SET created_at = ? WHERE task_id = ?", (iso_z, task_id))

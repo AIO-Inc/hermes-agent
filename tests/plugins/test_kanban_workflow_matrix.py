@@ -61,7 +61,7 @@ def _task_in(client, src: str) -> str:
         elif src == "review":
             assert kb.request_review(conn, tid, summary="s", force=True)
         elif src == "done":
-            assert kb.complete_task(conn, tid, summary="s", force=True)
+            assert kb.complete_task(conn, tid, summary="s", force=True, bypass_receipt=True)
         elif src == kw.ARCHIVED:
             assert kb.archive_task(conn, tid)
         assert kb.get_task(conn, tid).status == src

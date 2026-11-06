@@ -303,6 +303,19 @@ _SPECS = [
         _arg("--force", action="store_true",
              help="Override the live-claim guard: complete a running, claimed task "
                   "even without owning its run (closes the worker's run)."),
+        _arg("--bypass-receipt", action="store_true",
+             help="Explicitly skip the receipt gate: close a non-review task whose "
+                  "completion body has no verifiable evidence marker (URL, tx hash, "
+                  "commit SHA, test/CI output, diff, packet_hash, 'verified by'). "
+                  "For legitimate janitorial closes (e.g. a coordinator closing a "
+                  "superseded card) only — not a substitute for recording evidence."),
+        _arg("--bypass-provenance", action="store_true",
+             help="Explicitly skip the C-13 decision-provenance gate: close a "
+                  "keyword-tagged (consequential) card whose completion carries no "
+                  "Score + Choice + alternatives block. Separate from "
+                  "--bypass-receipt on purpose — a consequential decision missing "
+                  "its provenance is a real gap, so the receipt override never "
+                  "waves it through. Only relevant in 'enforced' mode (opt-in)."),
     ], help="Mark one or more tasks done"),
     _cmd("edit", [
         _TASK_ID,

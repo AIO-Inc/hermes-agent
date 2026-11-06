@@ -81,7 +81,7 @@ def _make_completed_task(delivery_mode):
             chat_type="dm",
             delivery_mode=delivery_mode,
         )
-        kb.complete_task(conn, tid, summary="done")
+        kb.complete_task(conn, tid, summary="done", bypass_receipt=True)
         return tid
     finally:
         conn.close()

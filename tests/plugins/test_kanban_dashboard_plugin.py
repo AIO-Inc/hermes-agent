@@ -289,7 +289,7 @@ def test_reopening_parent_demotes_ready_child(client):
 def test_reopening_parent_retracts_review_and_blocks_approval(client):
     with kbc.connect() as conn:
         parent_id = kb.create_task(conn, title="parent", assignee="planner")
-        assert kb.complete_task(conn, parent_id, result="done")
+        assert kb.complete_task(conn, parent_id, result="done", bypass_receipt=True)
         child_id = kb.create_task(
             conn,
             title="child in review",
@@ -327,7 +327,7 @@ def test_reopening_parent_retracts_review_and_blocks_approval(client):
         assert reclaimed is not None
         assert reclaimed.outcome == "reclaimed"
         assert kb.claim_review_task(conn, child_id) is None
-        assert not kb.complete_task(conn, child_id, summary="must not approve")
+        assert not kb.complete_task(conn, child_id, summary="must not approve", bypass_receipt=True)
         grandchild = kb.get_task(conn, grandchild_id)
         assert grandchild is not None
         assert grandchild.status == "todo"
@@ -348,8 +348,7 @@ def test_reopening_parent_retracts_review_and_blocks_approval(client):
             conn,
             child_id,
             summary="approved after parent stabilized",
-            expected_run_id=review.current_run_id,
-        )
+            expected_run_id=review.current_run_id, bypass_receipt=True)
         grandchild = kb.get_task(conn, grandchild_id)
         assert grandchild is not None
         assert grandchild.status == "ready"
@@ -357,14 +356,14 @@ def test_reopening_parent_retracts_review_and_blocks_approval(client):
 def test_reopening_parent_recursively_retracts_done_and_running_descendants(client):
     with kbc.connect() as conn:
         parent_id = kb.create_task(conn, title="root", assignee="planner")
-        assert kb.complete_task(conn, parent_id, result="done")
+        assert kb.complete_task(conn, parent_id, result="done", bypass_receipt=True)
         child_id = kb.create_task(
             conn,
             title="accepted child",
             assignee="builder",
             parents=[parent_id],
         )
-        assert kb.complete_task(conn, child_id, result="done")
+        assert kb.complete_task(conn, child_id, result="done", bypass_receipt=True)
         grandchild_id = kb.create_task(
             conn,
             title="running grandchild",
@@ -813,7 +812,7 @@ def test_event_dict_includes_run_id(client):
     try:
         kb.claim_task(conn, tid)
         run_id = kb.latest_run(conn, tid).id
-        kb.complete_task(conn, tid, summary="wss")
+        kb.complete_task(conn, tid, summary="wss", bypass_receipt=True)
     finally:
         conn.close()
 
@@ -976,8 +975,7 @@ def test_diagnostics_endpoint_surfaces_blocked_hallucination(client):
         with _pytest.raises(kb.HallucinatedCardsError):
             kb.complete_task(
                 conn, parent, summary="phantom",
-                created_cards=[real, "t_ffff00001234"],
-            )
+                created_cards=[real, "t_ffff00001234"], bypass_receipt=True)
     finally:
         conn.close()
 

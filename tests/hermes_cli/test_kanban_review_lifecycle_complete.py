@@ -142,8 +142,7 @@ def test_same_card_review_supports_changes_and_approval_without_block_loop(conn)
         conn,
         task_id,
         summary="Approved after independent verification.",
-        expected_run_id=review_2.current_run_id,
-    )
+        expected_run_id=review_2.current_run_id, bypass_receipt=True)
 
     completed = kb.get_task(conn, task_id)
     assert completed is not None
@@ -216,7 +215,7 @@ def test_review_changes_reapply_parent_gate(conn):
 
     # Move the task through review while its parent is temporarily terminal,
     # then make the parent non-terminal again before changes are requested.
-    assert kb.complete_task(conn, parent_id, result="done")
+    assert kb.complete_task(conn, parent_id, result="done", bypass_receipt=True)
     implementation = kb.claim_task(conn, task_id, claimer="builder:1")
     assert implementation is not None
     assert kb.request_review(
@@ -244,7 +243,7 @@ def test_review_changes_reapply_parent_gate(conn):
 
 def test_parent_reopen_blocks_request_review_until_parent_is_done(conn) -> None:
     parent_id = kb.create_task(conn, title="Parent", assignee="planner")
-    assert kb.complete_task(conn, parent_id, result="done")
+    assert kb.complete_task(conn, parent_id, result="done", bypass_receipt=True)
     task_id = kb.create_task(
         conn,
         title="Implementation with reopened parent",
@@ -264,7 +263,7 @@ def test_parent_reopen_blocks_request_review_until_parent_is_done(conn) -> None:
     still_running = kb.get_task(conn, task_id)
     assert still_running is not None
     assert still_running.status == "running"
-    assert kb.complete_task(conn, parent_id, result="done")
+    assert kb.complete_task(conn, parent_id, result="done", bypass_receipt=True)
     assert kb.request_review(
         conn,
         task_id,
@@ -439,7 +438,7 @@ def test_respawn_guards_compare_mixed_int_and_iso_times_by_value(conn) -> None:
 
     old_success = card("old success")
     kb.claim_task(conn, old_success)
-    kb.complete_task(conn, old_success, result="ok", force=True)
+    kb.complete_task(conn, old_success, result="ok", force=True, bypass_receipt=True)
     with kb.write_txn(conn):
         conn.execute("UPDATE task_runs SET ended_at = ? WHERE task_id = ?", (iso(30 * 86400), old_success))
         conn.execute("DELETE FROM task_events WHERE task_id = ?", (old_success,))
@@ -502,7 +501,7 @@ def test_review_escalation_unblocks_back_to_review(conn) -> None:
 
 def test_review_dependency_wait_reenters_review_after_parent_finishes(conn) -> None:
     parent_id = kb.create_task(conn, title="Parent", assignee="planner")
-    assert kb.complete_task(conn, parent_id, result="done")
+    assert kb.complete_task(conn, parent_id, result="done", bypass_receipt=True)
     task_id = kb.create_task(
         conn,
         title="Review after dependency refresh",
@@ -532,7 +531,7 @@ def test_review_dependency_wait_reenters_review_after_parent_finishes(conn) -> N
     waiting = kb.get_task(conn, task_id)
     assert waiting is not None
     assert waiting.status == "todo"
-    assert kb.complete_task(conn, parent_id, result="done")
+    assert kb.complete_task(conn, parent_id, result="done", bypass_receipt=True)
     resumed = kb.get_task(conn, task_id)
     assert resumed is not None
     assert resumed.status == "review"
@@ -627,7 +626,7 @@ def test_goal_run_status_is_bound_to_original_run(conn) -> None:
 def test_parked_review_approval_without_evidence_still_creates_audit_run(conn) -> None:
     task_id = kb.create_task(conn, title="Manual approval", assignee="reviewer")
     assert kb.request_review(conn, task_id, summary="implementation handoff")
-    assert kb.complete_task(conn, task_id)
+    assert kb.complete_task(conn, task_id, bypass_receipt=True)
     completed_event = _event(kb.list_events(conn, task_id), "completed")
     assert completed_event.run_id is not None
     run = kb.latest_run(conn, task_id)
@@ -789,5 +788,5 @@ def test_review_transitions_preserve_consecutive_failures(conn) -> None:
             "UPDATE tasks SET consecutive_failures = 1 WHERE id = ?",
             (ok_id,),
         )
-    assert kb.complete_task(conn, ok_id, summary="done")
+    assert kb.complete_task(conn, ok_id, summary="done", bypass_receipt=True)
     assert _failures(conn, ok_id) == 0

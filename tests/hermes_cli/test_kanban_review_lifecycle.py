@@ -323,7 +323,7 @@ def test_complete_task_closes_review_to_done(kanban_home: Path) -> None:
         # make `hermes kanban complete` a no-op (#54823).
         assert kb.get_task(conn, tid).current_run_id is None
 
-        ok = kb.complete_task(conn, tid, summary="LGTM — merged", result="approved")
+        ok = kb.complete_task(conn, tid, summary="LGTM — merged", result="approved", bypass_receipt=True)
         assert ok is True
         assert kb.get_task(conn, tid).status == "done"
         assert _events(conn, tid, kind="completed")
@@ -599,7 +599,7 @@ def test_active_pr_guard_lifts_for_implementer_after_changes_requested(
 
         done_id = kb.create_task(conn, title="recent success", assignee="dev")
         kb.claim_task(conn, done_id)
-        assert kb.complete_task(conn, done_id, summary="done") is True
+        assert kb.complete_task(conn, done_id, summary="done", bypass_receipt=True) is True
         with kb.write_txn(conn):
             conn.execute("UPDATE tasks SET status = 'ready' WHERE id = ?", (done_id,))
         assert kbd.check_respawn_guard(conn, done_id) == "recent_success"
@@ -729,8 +729,7 @@ def test_review_dispatch_honors_global_and_per_profile_caps(
             conn,
             running_id,
             result="done",
-            expected_run_id=running.current_run_id,
-        )
+            expected_run_id=running.current_run_id, bypass_receipt=True)
         global_dry_run = kbd.dispatch_once(
             conn,
             dry_run=True,
@@ -816,7 +815,7 @@ def test_review_cycle_end_to_end(kanban_home: Path) -> None:
         assert kb.get_task(conn, tid).status == "review"
 
         # Human approves.
-        assert kb.complete_task(conn, tid, summary="approved") is True
+        assert kb.complete_task(conn, tid, summary="approved", bypass_receipt=True) is True
         row = _row(conn, tid)
         assert row["status"] == "done"
         assert (row["block_recurrences"] or 0) == 0

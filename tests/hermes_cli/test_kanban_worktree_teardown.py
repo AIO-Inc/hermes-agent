@@ -243,7 +243,7 @@ def test_complete_task_reaps_clean_worktree(kanban_home: Path, repo: Path) -> No
         with kb.write_txn(conn):
             conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (tid,))
         assert kb.claim_task(conn, tid, claimer="worker") is not None
-        assert kb.complete_task(conn, tid, summary="done")
+        assert kb.complete_task(conn, tid, summary="done", bypass_receipt=True)
     assert not wt.exists()
     assert not _branch_exists(repo, f"wt/{tid}")
 
@@ -255,7 +255,7 @@ def test_complete_task_preserves_dirty_worktree(kanban_home: Path, repo: Path) -
         with kb.write_txn(conn):
             conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (tid,))
         assert kb.claim_task(conn, tid, claimer="worker") is not None
-        assert kb.complete_task(conn, tid, summary="done")
+        assert kb.complete_task(conn, tid, summary="done", bypass_receipt=True)
     assert wt.is_dir()
     assert (wt / "wip.txt").exists()
 
@@ -278,14 +278,14 @@ def test_parent_worktree_deferred_until_children_done(
         with kb.write_txn(conn):
             conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (parent,))
         assert kb.claim_task(conn, parent, claimer="worker") is not None
-        assert kb.complete_task(conn, parent, summary="parent done")
+        assert kb.complete_task(conn, parent, summary="parent done", bypass_receipt=True)
         # child still active -> parent worktree must survive for handoff
         assert parent_wt.is_dir()
 
         with kb.write_txn(conn):
             conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (child,))
         assert kb.claim_task(conn, child, claimer="worker") is not None
-        assert kb.complete_task(conn, child, summary="child done")
+        assert kb.complete_task(conn, child, summary="child done", bypass_receipt=True)
     # last child terminal -> deferred parent worktree reaped
     assert not parent_wt.exists()
 
@@ -351,7 +351,7 @@ def test_terminal_scratch_parent_still_swept_after_last_child(
         (ws / "handoff.txt").write_text("x", encoding="utf-8")
         child = kb.create_task(conn, title="probe")
         kb.link_tasks(conn, parent, child)
-        assert kb.complete_task(conn, parent, summary="parent done")
+        assert kb.complete_task(conn, parent, summary="parent done", bypass_receipt=True)
         assert ws.is_dir()  # live child still needs the handoff files
         assert kb.archive_task(conn, child)
     assert not ws.exists()

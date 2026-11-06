@@ -42,7 +42,7 @@ def _create_subscribed_task(*, chat_id: str = SESSION_KEY, platform: str = "tui"
 def _complete(tid: str, summary: str = "all done") -> None:
     conn = kbc.connect()
     try:
-        kb.complete_task(conn, tid, summary=summary)
+        kb.complete_task(conn, tid, summary=summary, bypass_receipt=True)
     finally:
         conn.close()
 
@@ -91,7 +91,7 @@ class TestCollectKanbanNotifications:
                     "UPDATE tasks SET status = 'ready' WHERE id = ?", (tid,)
                 )
                 kb._append_event(conn, tid, "status", {"status": "ready"})
-            assert kb.complete_task(conn, tid, summary="review corrections")
+            assert kb.complete_task(conn, tid, summary="review corrections", bypass_receipt=True)
         finally:
             conn.close()
 

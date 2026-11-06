@@ -2604,6 +2604,46 @@ class EmptyCompletionError(ValueError):
         )
 
 
+class MissingReceiptError(ValueError):
+    """``complete_task`` refused: the completion body is non-empty but carries
+    no verifiable receipt marker (URL, tx hash, commit SHA, test/CI output,
+    diff, packet_hash, ``verified by``, or provenance). A ``ValueError`` so
+    tool error handlers treat it as recoverable. Review approvals are exempt
+    (the human is the record); ``bypass_receipt=True`` is the explicit operator
+    override for legitimate janitorial closes."""
+
+    def __init__(self, task_id: str):
+        self.task_id = task_id
+        super().__init__(
+            f"completion blocked: {task_id} has result text but no receipt marker "
+            f"(URL, tx hash, commit SHA, test/CI output, diff, packet_hash, "
+            f"'verified by', or provenance). Include verifiable evidence in the "
+            f"result, or close it explicitly with `kanban complete --bypass-receipt`."
+        )
+
+
+class MissingProvenanceError(ValueError):
+    """``complete_task`` refused: the card touches a consequential keyword (money /
+    reputation / irreversible-time) but carries no provenance block (Score + Choice +
+    alternatives). A ``ValueError`` so tool error handlers treat it as recoverable.
+    Raised only in ``enforced`` mode (opt-in per org); advisory/shadow post an
+    advisory comment instead. ``bypass_provenance=True`` is the explicit operator
+    override — deliberately a separate flag from ``bypass_receipt`` so a
+    consequential decision missing its provenance is never silently waved through."""
+
+    def __init__(self, task_id: str, hits: list[str]):
+        self.task_id = task_id
+        self.hits = hits
+        super().__init__(
+            f"completion blocked: {task_id} touches consequential keywords "
+            f"{hits} but carries no provenance block (Score + Choice + alternatives). "
+            f"Record the decision's provenance — Score, Choice (selected option vs "
+            f">=2 alternatives, one of which is do-nothing), and the alternatives "
+            f"considered — or close it explicitly with `kanban complete "
+            f"--bypass-provenance`."
+        )
+
+
 class ArtifactPreservationError(RuntimeError):
     """Raised when a declared scratch deliverable cannot be preserved."""
 
@@ -2642,6 +2682,7 @@ def complete_task(
     summary: Optional[str] = None, metadata: Optional[dict] = None,
     created_cards: Optional[Iterable[str]] = None, expected_run_id: Optional[int] = None,
     fire_lifecycle_hook: bool = True, force: bool = False,
+    bypass_receipt: bool = False, bypass_provenance: bool = False,
 ) -> bool:
     """``running|ready|blocked|review -> done``; records ``result``.
 
@@ -2657,8 +2698,11 @@ def complete_task(
     prose is scanned for unresolvable ``t_<hex>`` refs (advisory event only).
     Completions from non-review statuses need evidence: a stripped ``result``
     or ``summary``, or a stripped result already stored on the card. Empty or
-    whitespace-only evidence raises :class:`EmptyCompletionError` after an
-    auditable event. Approving a card out of ``review`` stays exempt.
+    whitespace-only evidence raises :class:`EmptyCompletionError`; a non-empty
+    body with no verifiable receipt marker raises :class:`MissingReceiptError`
+    — both after an auditable event. ``bypass_receipt=True`` skips the receipt
+    gate for explicit janitorial closes. Approving a card out of ``review``
+    stays exempt.
     """
     now = int(time.time())
     # Cheap pre-check; re-checked inside the txn to close the parent-reopen race.
@@ -2666,7 +2710,9 @@ def complete_task(
         return False
     from hermes_cli.kanban_pr_acceptance_store import prepare_acceptance, record_acceptance
     verified_cards = _gate_created_cards(conn, task_id, created_cards, summary or result)
-    _gate_empty_completion(conn, task_id, result=result, summary=summary)
+    _gate_empty_completion(conn, task_id, result=result, summary=summary,
+                           bypass_receipt=bypass_receipt,
+                           bypass_provenance=bypass_provenance)
     metadata = _merge_completion_prose_artifacts(
         conn, task_id, metadata, summary=summary, result=result,
     )
@@ -2774,20 +2820,199 @@ def _substantive_text(value: Optional[str]) -> bool:
     return bool(value is not None and str(value).strip())
 
 
+# Evidence-marker regex: what counts as a verifiable receipt on a card close.
+# Kept in sync, by spirit, with the receipt-on-close sweep
+# (~/.hermes/profiles/henry/scripts/receipt_on_close_sweep.py RECEIPT_RE) and
+# the C-13 provenance hook. Any one match is sufficient evidence that a third
+# party could verify the work against.
+RECEIPT_RE = re.compile(
+    r"(?:"
+    r"https?://\S+"                          # URL
+    r"|\b0x[0-9a-fA-F]{8,}\b"                # tx hash / address
+    r"|\bcommit\s+[0-9a-f]{7,40}\b"          # short/abbrev commit ref
+    r"|\b[0-9a-f]{40}\b"                     # full git SHA
+    r"|\bpytest\b"
+    r"|\b\d+\s+(?:passed|failed|passing|failing|errors?)\b"
+    r"|\b\d+/\d+\s*(?:passed|tests?|green)\b"
+    r"|\bCI\s+(?:green|passes?)\b"
+    r"|\btests?\s+(?:green|pass(?:ing|es)?)\b"
+    r"|diff\s+--git"
+    r"|^@@\s-\d"                             # unified-diff hunk header
+    r"|\bpacket_hash\b"
+    r"|\bverified\s+by\b"
+    r"|\bsee\s+attached\b"
+    r"|\b(?:Score|Choice|Alternatives)\s*[:=]"
+    r")",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+# --- C-13 decision-provenance gate (RECORD class, not a confidence gate) ---
+# A card whose title/body/completion touches a "consequential" keyword (money /
+# reputation / irreversible-time) must carry a provenance block of the form
+# ``Score[:=]... Choice[:=]... alternatives[:=]`` before it may be marked done.
+# This mirrors the deterministic presence check in the sean-ops reference hook
+# (~/.hermes/profiles/henry/scripts/clef_ops/hooks/provenance_linter.py): a
+# RECORD presence gate, NOT a Clef-model judgment. Modes: ``enforced`` (block) /
+# ``advisory`` / ``shadow`` (post an advisory comment, never block). Keywords +
+# mode are tuned without code edits via ~/.hermes/kanban/provenance-gate.json,
+# read at call time like classes.json.
+
+PROVENANCE_RE = re.compile(
+    r"score\s*[:=].+choice\s*[:=].+alternatives\s*[:=]", re.IGNORECASE | re.DOTALL
+)
+
+# Default keyword list: byte-for-byte the sean-ops provenance_keywords.json list
+# (rehearsal-calibrated verb+target operational collocations). Used only when no
+# provenance-gate.json exists; a missing/corrupt config also falls back to these.
+DEFAULT_PROVENANCE_KEYWORDS: tuple[str, ...] = (
+    "wire transfer", "send payment", "issue refund", "process payment",
+    "charge card", "invoice client", "transfer funds",
+    "press release", "public statement", "announce publicly", "post to social",
+    "drop database", "delete production", "destroy", "irreversible migration",
+    "wipe", "revoke access", "rotate keys",
+    "sign contract", "execute contract", "bind contract",
+    "deploy prod", "production deploy", "migrate production",
+)
+
+DEFAULT_PROVENANCE_MODE = "advisory"
+
+PROVENANCE_MODES: frozenset[str] = frozenset({"enforced", "advisory", "shadow", "off"})
+
+
+def _provenance_gate_config_path() -> Path:
+    return kanban_home() / "kanban" / "provenance-gate.json"
+
+
+def _load_provenance_gate_config() -> dict[str, Any]:
+    """Read the provenance-gate config at call time (like classes.json).
+
+    Schema: ``{"mode": "advisory", "keywords": [...]}``. Fail-closed on a missing
+    or corrupt file: return the defaults (advisory + ``DEFAULT_PROVENANCE_KEYWORDS``)
+    so no org is ever surprised by an enforced block and no card is keyword-tagged
+    off a list we can't justify. ``mode: "off"`` disables the gate entirely.
+    """
+    path = _provenance_gate_config_path()
+    try:
+        table = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {"mode": DEFAULT_PROVENANCE_MODE, "keywords": list(DEFAULT_PROVENANCE_KEYWORDS)}
+    mode = str(table.get("mode", DEFAULT_PROVENANCE_MODE)).strip().lower()
+    if mode not in PROVENANCE_MODES:
+        mode = DEFAULT_PROVENANCE_MODE
+    raw_keywords = table.get("keywords")
+    if isinstance(raw_keywords, list):
+        keywords = [str(k).strip() for k in raw_keywords if str(k).strip()]
+    else:
+        keywords = list(DEFAULT_PROVENANCE_KEYWORDS)
+    return {"mode": mode, "keywords": keywords}
+
+
+def _keyword_hits(text: Optional[str], keywords: list[str]) -> list[str]:
+    """Word-boundary, case-insensitive keyword hits in ``text`` (mirrors the hook)."""
+    low = (text or "").lower()
+    return [k for k in keywords if re.search(rf"\b{re.escape(k.lower())}\b", low)]
+
+
+def _has_provenance_block(text: Optional[str]) -> bool:
+    return bool(PROVENANCE_RE.search(text or ""))
+
+
+def _has_receipt_marker(text: Optional[str]) -> bool:
+    """True when ``text`` carries at least one verifiable receipt marker."""
+    return bool(text and RECEIPT_RE.search(str(text)))
+
+
+def _gate_provenance(
+    conn: sqlite3.Connection,
+    task_id: str,
+    row: sqlite3.Row,
+    *,
+    result: Optional[str],
+    summary: Optional[str],
+    stored: Optional[str],
+    bypass: bool,
+) -> None:
+    """C-13 decision-provenance presence gate (RECORD, deterministic).
+
+    A card whose title/body/completion touches a consequential keyword and lacks
+    the Score + Choice + alternatives block is refused in ``enforced`` mode;
+    advisory/shadow post an advisory comment (never block). ``mode: "off"`` or an
+    empty keyword list disables the gate. No Clef call is involved — this is a
+    deterministic completeness check on a required record (§9.2).
+    """
+    cfg = _load_provenance_gate_config()
+    mode = cfg["mode"]
+    keywords = cfg["keywords"]
+    if mode == "off" or not keywords:
+        return
+    haystack = "\n".join(
+        str(p).strip() for p in (row["title"], row["body"], result, summary, stored)
+        if p and str(p).strip()
+    )
+    hits = _keyword_hits(haystack, keywords)
+    if not hits:
+        return
+    if _has_provenance_block(haystack):
+        return
+    if bypass:
+        return
+    if mode == "enforced":
+        with write_txn(conn):
+            _append_event(
+                conn, task_id, "completion_blocked_missing_provenance",
+                {"keyword_hits": hits, "mode": mode},
+            )
+        raise MissingProvenanceError(task_id, hits)
+    # advisory / shadow: post an advisory comment, never block.
+    advisory = (
+        f"C-13 decision-provenance advisory: this card touches consequential "
+        f"keywords ({', '.join(hits)}) but its completion carries no provenance "
+        f"block (Score + Choice + alternatives). Nothing was blocked — the gate "
+        f"is in {mode} mode. Record the decision's provenance (selected option "
+        f"vs >=2 alternatives, one do-nothing) before the next close."
+    )
+    with write_txn(conn):
+        _append_event(
+            conn, task_id, "completion_provenance_advisory",
+            {"keyword_hits": hits, "mode": mode},
+        )
+        add_comment(conn, task_id, "provenance-gate", advisory)
+
+
 def _gate_empty_completion(
     conn: sqlite3.Connection,
     task_id: str,
     *,
     result: Optional[str],
     summary: Optional[str],
+    bypass_receipt: bool = False,
+    bypass_provenance: bool = False,
 ) -> None:
-    """Refuse a completion that would leave the card with no evidence.
+    """Refuse a completion that would leave the card with no evidence, or a
+    consequential decision with no provenance.
+
+    Three tiers, each raising a recoverable ``ValueError`` after an auditable
+    event and before any state mutation:
+
+    1. Empty: a stripped ``result``, ``summary``, and stored result together
+       carry no text at all -> :class:`EmptyCompletionError`.
+    2. No receipt: the body is non-empty but none of it carries a verifiable
+       marker (URL, tx hash, commit SHA, test/CI output, diff, packet_hash,
+       ``verified by``, provenance) -> :class:`MissingReceiptError`.
+    3. No provenance (C-13): a keyword-tagged (consequential) card lacks the
+       Score + Choice + alternatives block. ``enforced`` mode raises
+       :class:`MissingProvenanceError`; advisory/shadow post an advisory comment
+       and never block.
 
     Review approvals are exempt: a human vouches for the card and
-    ``_REVIEW_APPROVED_NOTE`` is the documented record.
+    ``_REVIEW_APPROVED_NOTE`` is the documented record. ``bypass_receipt`` is
+    the explicit operator override for legitimate janitorial closes and does NOT
+    waive provenance; ``bypass_provenance`` is the separate override for a
+    consequential close whose provenance is recorded elsewhere.
     """
     row = conn.execute(
-        "SELECT status, result FROM tasks WHERE id = ?",
+        "SELECT status, result, title, body FROM tasks WHERE id = ?",
         (task_id,),
     ).fetchone()
     if row is None:
@@ -2796,6 +3021,28 @@ def _gate_empty_completion(
         return
     stored = row["result"]
     if _substantive_text(result) or _substantive_text(summary) or _substantive_text(stored):
+        # Non-empty body: still require a verifiable receipt marker unless the
+        # operator explicitly bypassed the gate.
+        if not bypass_receipt:
+            evidence = "\n".join(
+                str(p).strip() for p in (result, summary, stored)
+                if _substantive_text(p)
+            )
+            if not _has_receipt_marker(evidence):
+                with write_txn(conn):
+                    _append_event(
+                        conn, task_id, "completion_blocked_missing_receipt",
+                        {
+                            "result_preview": _first_line(result, 200) or None,
+                            "summary_preview": _first_line(summary, 200) or None,
+                        },
+                    )
+                raise MissingReceiptError(task_id)
+        # C-13 provenance gate is independent of the receipt bypass: a
+        # consequential decision missing its provenance is a real gap even when
+        # the operator waves the evidence marker for a janitorial close.
+        _gate_provenance(conn, task_id, row, result=result, summary=summary,
+                         stored=stored, bypass=bypass_provenance)
         return
     with write_txn(conn):
         _append_event(

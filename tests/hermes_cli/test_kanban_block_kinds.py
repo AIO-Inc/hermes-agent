@@ -108,7 +108,7 @@ def test_dependency_then_parent_done_promotes(kanban_home: Path) -> None:
         with kb.write_txn(conn):
             conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (parent,))
         kb.claim_task(conn, parent, claimer="worker")
-        kb.complete_task(conn, parent, result="done")
+        kb.complete_task(conn, parent, result="done", bypass_receipt=True)
         kb.recompute_ready(conn)
         assert kb.get_task(conn, child).status == "ready"
 
@@ -183,7 +183,7 @@ def test_dependency_block_with_open_parent_stays_parked_across_dispatch_tick(
         with kb.write_txn(conn):
             conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (parent,))
         kb.claim_task(conn, parent, claimer="alice")
-        kb.complete_task(conn, parent, result="done")
+        kb.complete_task(conn, parent, result="done", bypass_receipt=True)
         res2 = kbd.dispatch_once(conn, spawn_fn=fake_spawn)
         assert child in [row[0] for row in res2.spawned]
 

@@ -61,7 +61,7 @@ def _create_completed_subscription(summary="done once"):
     try:
         tid = kb.create_task(conn, title="notify once", assignee="worker")
         kbn.add_notify_sub(conn, task_id=tid, platform="telegram", chat_id="chat-1")
-        kb.complete_task(conn, tid, summary=summary)
+        kb.complete_task(conn, tid, summary=summary, bypass_receipt=True)
         return tid
     finally:
         conn.close()
@@ -110,7 +110,7 @@ def test_kanban_notifier_replays_telegram_dm_topic_delivery_metadata(tmp_path, m
                 "thread_id": "20197",
             },
         )
-        kb.complete_task(conn, tid, summary="done")
+        kb.complete_task(conn, tid, summary="done", bypass_receipt=True)
     finally:
         conn.close()
 
@@ -188,7 +188,7 @@ def test_non_dispatch_gateway_claims_only_its_profile_subscriptions(
             chat_id="default-chat",
             notifier_profile="default",
         )
-        kb.complete_task(conn, foreign_tid, summary="default done")
+        kb.complete_task(conn, foreign_tid, summary="default done", bypass_receipt=True)
 
         owned_tid = kb.create_task(
             conn, title="writer-owned", assignee="worker",
@@ -200,7 +200,7 @@ def test_non_dispatch_gateway_claims_only_its_profile_subscriptions(
             chat_id="writer-chat",
             notifier_profile="writer",
         )
-        kb.complete_task(conn, owned_tid, summary="writer done")
+        kb.complete_task(conn, owned_tid, summary="writer done", bypass_receipt=True)
     finally:
         conn.close()
 
@@ -232,7 +232,7 @@ def test_legacy_subscription_requires_confirmed_dispatcher_lock_owner(
             platform="telegram",
             chat_id="legacy-chat",
         )
-        kb.complete_task(conn, task_id, summary="legacy done")
+        kb.complete_task(conn, task_id, summary="legacy done", bypass_receipt=True)
     finally:
         conn.close()
 
@@ -382,7 +382,7 @@ def test_notifier_subscription_survives_done_reopen_until_archive(
             notifier_profile="reviewer",
             delivery_mode="notify+wake",
         )
-        assert kb.complete_task(conn, tid, summary="first completion")
+        assert kb.complete_task(conn, tid, summary="first completion", bypass_receipt=True)
     finally:
         conn.close()
 
@@ -419,7 +419,7 @@ def test_notifier_subscription_survives_done_reopen_until_archive(
         with kb.write_txn(conn):
             conn.execute("UPDATE tasks SET status = 'ready' WHERE id = ?", (tid,))
             kb._append_event(conn, tid, "status", {"status": "ready"})
-        assert kb.complete_task(conn, tid, summary="corrected completion")
+        assert kb.complete_task(conn, tid, summary="corrected completion", bypass_receipt=True)
     finally:
         conn.close()
 
@@ -480,7 +480,7 @@ def test_notifier_wakeup_uses_subscription_chat_type(tmp_path, monkeypatch):
             chat_type="dm",
             delivery_mode="notify+wake",
         )
-        kb.complete_task(conn, tid, summary="done")
+        kb.complete_task(conn, tid, summary="done", bypass_receipt=True)
     finally:
         conn.close()
 
@@ -539,11 +539,11 @@ def test_kanban_notifier_isolates_per_subscription_failure(tmp_path, monkeypatch
     try:
         tid_bad = kb.create_task(conn, title="bad task", assignee="worker")
         kbn.add_notify_sub(conn, task_id=tid_bad, platform="telegram", chat_id="chat-bad")
-        kb.complete_task(conn, tid_bad, summary="done")
+        kb.complete_task(conn, tid_bad, summary="done", bypass_receipt=True)
 
         tid_good = kb.create_task(conn, title="good task", assignee="worker")
         kbn.add_notify_sub(conn, task_id=tid_good, platform="telegram", chat_id="chat-good")
-        kb.complete_task(conn, tid_good, summary="done")
+        kb.complete_task(conn, tid_good, summary="done", bypass_receipt=True)
     finally:
         conn.close()
 
