@@ -147,12 +147,14 @@ def worker_billing_route(db, conn, session_id, payload):
 
 def worker_api_content(db, conn, session_id, payload):
     from hermes_state_messages import _scrub_surrogates
+    from hermes_state_redaction import redact_for_persist
     if set(payload) != {'content', 'api_content'} or not isinstance(payload['api_content'], str):
         raise RuntimeStoreError('invalid_params')
     value = conn.execute(
         "UPDATE messages SET api_content=? WHERE id=(SELECT id FROM messages WHERE session_id=? "
         "AND role='user' AND active=1 ORDER BY id DESC LIMIT 1) AND content IS ?",
-        (_scrub_surrogates(payload['api_content']), session_id, db._encode_content(payload['content']))).rowcount
+        (redact_for_persist(_scrub_surrogates(payload['api_content'])), session_id,
+         db._encode_content(payload['content']))).rowcount
     return {'value': value}
 
 
@@ -166,26 +168,28 @@ def _row_id(payload):
 def worker_message_api_content(db, conn, session_id, payload):
     """Row-addressed sidecar backfill, same guards as ``SessionDB.set_message_api_content``."""
     from hermes_state_messages import _scrub_surrogates
+    from hermes_state_redaction import redact_for_persist
     if set(payload) != {'row_id', 'content', 'api_content'} or not isinstance(payload['api_content'], str):
         raise RuntimeStoreError('invalid_params')
     return {'value': conn.execute(
         "UPDATE messages SET api_content=? WHERE id=? AND session_id=? AND role='user' AND active=1 AND content IS ?",
-        (_scrub_surrogates(payload['api_content']), _row_id(payload), session_id,
+        (redact_for_persist(_scrub_surrogates(payload['api_content'])), _row_id(payload), session_id,
          db._encode_content(payload['content']))).rowcount}
 
 
 def worker_user_content(db, conn, session_id, payload):
     """Rewrite ONE active user row of this session, same guards as ``SessionDB.set_user_message_content``."""
+    from hermes_state_redaction import redact_for_persist
     if set(payload) - {'display_metadata'} != {'row_id', 'content'}:
         raise RuntimeStoreError('invalid_params')
     if 'display_metadata' not in payload:
         return {'value': conn.execute(
             "UPDATE messages SET content=? WHERE id=? AND session_id=? AND role='user' AND active=1",
-            (db._encode_content(payload['content']), _row_id(payload), session_id)).rowcount}
+            (redact_for_persist(db._encode_content(payload['content'])), _row_id(payload), session_id)).rowcount}
     return {'value': conn.execute(
         "UPDATE messages SET content=?, api_content=NULL, display_metadata=? "
         "WHERE id=? AND session_id=? AND role='user' AND active=1",
-        (db._encode_content(payload['content']), db._encode_display_metadata(payload['display_metadata']),
+        (redact_for_persist(db._encode_content(payload['content'])), db._encode_display_metadata(payload['display_metadata']),
          _row_id(payload), session_id)).rowcount}
 
 

@@ -24,6 +24,7 @@ from hermes_state_common import (
     _json_or, _legacy_reset_child_sql, _placeholders, _sql_json_extract)
 from hermes_state_compaction_display import later_tool_copy_ids, not_a_later_tool_copy_sql
 from hermes_state_detached_results import SessionDetachedResultsMixin
+from hermes_state_redaction import redact_for_persist, redact_secrets, transcript_redaction_enabled
 from hermes_state_todo import SessionTodoResultMixin
 from hermes_state_identity import (
     _absorbed_uids_json, _restore_identity_columns, _stable_tool_key, _tool_call_uid_map, _tool_call_uid_or_none, _tool_call_uids_json, _uid_list)
@@ -274,9 +275,15 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         ``message_id`` (yuanbao's message-dict convention)."""
         _str_or_none = lambda v: _scrub_surrogates(v) if isinstance(v, str) else None
         _reasoning = lambda key: msg.get(key) if keep_reasoning else None
-        encoded_content = self._encode_content(msg.get("content"))
-        encoded_tool_calls = json.dumps(tool_calls) if tool_calls else None
-        encoded_tool_name = _scrub_surrogates(msg.get("tool_name"))
+        # Transcript-write secret redaction (sean-ops/t_1602bd9f): scrub sbp_/eyJ secrets from
+        # every secret-bearing field as it is serialized, so neither the ``messages`` row nor the
+        # FTS5 triggers that index it ever see the secret. A no-op for ordinary text; disabled when
+        # ``sessions.transcript_secret_redaction`` is false; fail-open on any error.
+        _redact = redact_secrets if transcript_redaction_enabled() else (lambda v: v)
+        encoded_content = _redact(self._encode_content(msg.get("content")))
+        encoded_tool_calls = _redact(json.dumps(tool_calls)) if tool_calls else None
+        encoded_tool_name = _redact(_scrub_surrogates(msg.get("tool_name")))
+        tool_call_id = _redact(msg.get("tool_call_id"))
         display_metadata = msg.get("display_metadata")
         if msg.get(DATA_USE) and isinstance(display_metadata, (dict, type(None))):
             # Writers that copy a fixed field list (/branch) carry the key, not display_metadata.
@@ -284,19 +291,20 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         display_metadata = self._encode_display_metadata(display_metadata)
         identity_row = {
             "role": role, "content": encoded_content, "timestamp": message_timestamp,
-            "tool_call_id": msg.get("tool_call_id"), "tool_calls": encoded_tool_calls,
+            "tool_call_id": tool_call_id, "tool_calls": encoded_tool_calls,
             "tool_name": encoded_tool_name, "display_kind": msg.get("display_kind"),
             "display_metadata": display_metadata,
         }
-        return (session_id, role, encoded_content, msg.get("tool_call_id"),
+        return (session_id, role, encoded_content, tool_call_id,
             encoded_tool_calls, encoded_tool_name,
             msg.get("effect_disposition"), message_timestamp, msg.get("token_count"), msg.get("finish_reason"),
-            _scrub_surrogates(_reasoning("reasoning")), _scrub_surrogates(_reasoning("reasoning_content")),
-            *(self._reasoning_json_text(_reasoning(k))
+            _redact(_scrub_surrogates(_reasoning("reasoning"))),
+            _redact(_scrub_surrogates(_reasoning("reasoning_content"))),
+            *(_redact(self._reasoning_json_text(_reasoning(k)))
               for k in ("reasoning_details", "codex_reasoning_items", "codex_message_items")),
             msg.get("platform_message_id") or msg.get("message_id"),
             1 if msg.get("observed") else 0, 1 if msg.get("_compressed_summary") else 0, 1,
-            _str_or_none(msg.get("api_content")), _str_or_none(msg.get("display_kind")),
+            _redact(_str_or_none(msg.get("api_content"))), _str_or_none(msg.get("display_kind")),
             display_metadata, self._display_identity(self._display_dedupe_key(identity_row)),
             message_uid_or_none(msg), _absorbed_uids_json(msg),
             _tool_call_uids_json(msg), _tool_call_uid_or_none(msg))
@@ -1052,11 +1060,12 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         if display_metadata is None:
             return self._write_rowcount(
                 "UPDATE messages SET content = ? WHERE id = ? AND session_id = ? AND role = 'user' AND active = 1",
-                (self._encode_content(content), row_id, session_id))
+                (redact_for_persist(self._encode_content(content)), row_id, session_id))
         return self._write_rowcount(
             "UPDATE messages SET content = ?, api_content = NULL, display_metadata = ? "
             "WHERE id = ? AND session_id = ? AND role = 'user' AND active = 1",
-            (self._encode_content(content), self._encode_display_metadata(display_metadata), row_id, session_id))
+            (redact_for_persist(self._encode_content(content)), self._encode_display_metadata(display_metadata),
+             row_id, session_id))
 
     def deactivate_message(self, session_id: str, row_id: int) -> int:
         """Deactivate ONE known row (id-addressed, idempotent; returns the affected row count). Used by
