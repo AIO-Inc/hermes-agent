@@ -478,11 +478,13 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
                     "See https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban.",
     )
     # --board scopes every subcommand to one board's DB; when omitted the
-    # resolution is HERMES_KANBAN_BOARD, then the persisted current-board
-    # file, then "default" (kanban_db.get_current_board()).
+    # resolution is HERMES_KANBAN_BOARD, then this profile's
+    # kanban.default_board, then the persisted current-board file (last
+    # resort), then "default" (kanban_db.get_current_board()).
     kanban_parser.add_argument("--board", default=None, metavar="<slug>",
                                help="Board slug to operate on. Defaults to the current board (set "
-                                    "via `hermes kanban boards switch <slug>` or the "
+                                    "via `hermes kanban boards switch <slug>`, the profile's "
+                                    "kanban.default_board config, or the "
                                     "HERMES_KANBAN_BOARD env var). Use `hermes kanban boards "
                                     "list` to see all boards.")
     _add_commands(kanban_parser.add_subparsers(dest="kanban_action"), _SPECS)

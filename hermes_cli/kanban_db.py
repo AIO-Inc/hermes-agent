@@ -2,8 +2,9 @@
 
 Lives under the shared Hermes root: ``default`` board DB at ``<root>/kanban.db`` (pre-boards
 back-compat), other boards at ``<root>/kanban/boards/<slug>/``; a worker on one board never sees
-another. Board resolution: ``board=`` arg > ``HERMES_KANBAN_BOARD`` > ``HERMES_KANBAN_DB`` (pins the
-file path) > ``<root>/kanban/current`` > ``default`` — but only for unfenced callers; the dispatcher
+another. Board resolution: ``board=`` arg > ``HERMES_KANBAN_BOARD`` > profile
+``kanban.default_board`` > ``HERMES_KANBAN_DB`` (pins the file path) > ``<root>/kanban/current``
+(last resort) > ``default`` — but only for unfenced callers; the dispatcher
 injects these into workers, and dispatched workers (``HERMES_KANBAN_TASK``), delegated children and
 board-enumerating machine flows (gateway notifier/watcher/dispatcher, ``pin_first_board_resolution``)
 always resolve through the pin, so workers physically cannot see other boards.
@@ -420,11 +421,58 @@ def current_board_path() -> Path:
     return kanban_home() / "kanban" / "current"
 
 
+def _profile_default_board() -> Optional[str]:
+    """The active profile's ``kanban.default_board`` from its config.yaml, or ``None``.
+
+    Opt-in and per-profile: a seat (profile = ``HERMES_HOME``) that sets this key resolves
+    to its own board even when some other seat left the machine-wide ``<root>/kanban/current``
+    pointer pointing elsewhere. A profile WITHOUT the key returns ``None`` so resolution keeps
+    the legacy global-pointer behavior. Config loading is lazy (kept out of import scope) and
+    best-effort: a malformed/unreadable config.yaml falls through to ``None`` rather than
+    crashing board resolution.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+        kanban_cfg = load_config_readonly().get("kanban")
+        raw = kanban_cfg.get("default_board") if isinstance(kanban_cfg, dict) else None
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        return _normalize_board_slug(raw)
+    except ValueError:
+        return None
+
+
+_warned_global_current_board = False
+
+
+def _warn_legacy_global_current_board() -> None:
+    """One-time warning that a seat fell back to the shared ``<root>/kanban/current`` pointer.
+
+    Fired only when the pointer actually resolved the board (and only once per process), nudging
+    the operator toward ``kanban.default_board`` to make board separation substrate-enforced
+    instead of social.
+    """
+    global _warned_global_current_board
+    if _warned_global_current_board:
+        return
+    _warned_global_current_board = True
+    _log.warning(
+        "kanban: no per-profile default board; resolving via the shared "
+        "<root>/kanban/current pointer (a `boards switch` in any profile retargets every "
+        "seat). Set 'kanban.default_board' in this profile's config.yaml to pin a "
+        "per-profile default board."
+    )
+
+
 def get_current_board() -> str:
-    """Active slug: context override -> ``HERMES_KANBAN_BOARD`` -> ``<root>/kanban/current``
-    (only while that board exists) -> ``DEFAULT_BOARD``. A malformed/stale slug
-    falls through — the dispatcher must never crash on a hand-edited file."""
-    def _existing(candidate: str) -> Optional[str]:
+    """Active slug: context override -> ``HERMES_KANBAN_BOARD`` -> profile
+    ``kanban.default_board`` -> ``<root>/kanban/current`` (last resort, only while that board
+    exists) -> ``DEFAULT_BOARD``. A malformed/stale slug falls through — the dispatcher must
+    never crash on a hand-edited file."""
+    def _existing(candidate: Optional[str]) -> Optional[str]:
         if not candidate:
             return None
         try:
@@ -447,6 +495,14 @@ def get_current_board() -> str:
         found = _existing(candidate)
         if found:
             return found
+
+    # Per-profile default (opt-in) outranks the machine-wide ``current`` pointer: a seat with
+    # ``kanban.default_board`` set resolves to its own board instead of whatever board happens
+    # to be `current` machine-wide, closing the silent cross-org retarget bug.
+    profile_default = _existing(_profile_default_board())
+    if profile_default:
+        return profile_default
+
     try:
         f = current_board_path()
         if f.exists():
@@ -456,6 +512,7 @@ def get_current_board() -> str:
                 try:
                     normed = _normalize_board_slug(val)
                     if normed and board_exists(normed):
+                        _warn_legacy_global_current_board()
                         return normed
                 except ValueError:
                     pass

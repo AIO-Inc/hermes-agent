@@ -1895,6 +1895,14 @@ DEFAULT_CONFIG = {
         # Assignee when the orchestrator can't match one to an installed profile; "" = default
         # profile. A task never ends up with assignee=None.
         "default_assignee": "",
+        # Per-profile default board (opt-in): when a seat runs `hermes kanban` without an
+        # explicit ``--board`` and no worker/env pin applies, resolve to THIS board instead of
+        # the machine-wide ``<root>/kanban/current`` pointer. The shared pointer is a silent
+        # cross-org retarget hazard (one seat's `boards switch` changes every seat's board), so
+        # a seat that sets this never lands on another org's board. Empty string = preserve the
+        # legacy global-pointer behavior (backward-compatible default). The board must already
+        # exist (`hermes kanban boards create <slug>`), else resolution falls through.
+        "default_board": "",
         # Global cap: positive int = the HOST never has more than N tasks 'running' across all
         # boards and both dispatch lanes. None = ~MemTotal / 512 MiB clamped to [2, 8]; where
         # MemTotal is unreadable (macOS/Windows) None means no cap.
