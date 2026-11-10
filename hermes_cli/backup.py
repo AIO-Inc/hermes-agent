@@ -31,6 +31,27 @@ from hermes_cli.config_backend import require_file_tooling, supports_file_toolin
 from hermes_cli.home_data_layout import PM_RUNTIME_ROOT_DIRS, SECRET_CACHE_FILES, profile_root_entry
 from hermes_cli.sizefmt import format_bytes as _format_size
 
+
+def _sweep_copy_secrets(db_path: Path) -> None:
+    """Redact ``sbp_`` / ``eyJ`` secrets from a just-written snapshot/backup COPY (Option C).
+
+    Fail-open: a sweep error is logged and the copy stays as-is; it never breaks the
+    snapshot/backup/update. The source (live) DB is untouched — the sweep only opens the
+    destination copy.
+    """
+    try:
+        from hermes_state_sweep import sweep_secrets_from_copy
+        summary = sweep_secrets_from_copy(db_path)
+        if summary.get("error"):
+            logger.warning("Secret sweep of %s failed (continuing): %s", db_path, summary["error"])
+        elif summary.get("rows_redacted"):
+            logger.info(
+                "Secret sweep redacted %d row(s) across %d table(s) in %s",
+                summary["rows_redacted"], summary.get("tables", 0), db_path,
+            )
+    except Exception as exc:  # fail-open: an unimportable hook must not break the backup
+        logger.warning("Secret sweep unavailable for %s: %s", db_path, exc)
+
 from hermes_cli.backup_restore import (
     _count_cron_jobs,
     _count_session_rows,
@@ -501,6 +522,7 @@ def _zip_sqlite_snapshot(zf: zipfile.ZipFile, abs_path: Path, rel_path: Path, ou
     try:
         if not _safe_copy_db(abs_path, tmp_db):
             return None
+        _sweep_copy_secrets(tmp_db)
         _write_zip_file(zf, tmp_db, str(rel_path))
         return tmp_db.stat().st_size
     finally:
@@ -1362,6 +1384,7 @@ def _create_quick_snapshot_locked(
                                     f"(no SQLite header; {sub.stat().st_size} bytes of NULs?)"
                                 )
                             continue
+                        _sweep_copy_secrets(dst)
                     else:
                         shutil.copy2(sub, dst)
                     manifest[sub_rel] = dst.stat().st_size
@@ -1394,6 +1417,7 @@ def _create_quick_snapshot_locked(
                             f"(no SQLite header; {src.stat().st_size} bytes)"
                         )
                     continue
+                _sweep_copy_secrets(dst)
             else:
                 shutil.copy2(src, dst)
             manifest[rel] = dst.stat().st_size

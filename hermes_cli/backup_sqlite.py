@@ -219,6 +219,24 @@ def _reclaim_abandoned_staging(home: Path, prefix: str) -> None:
                 staged.unlink()
 
 
+def _sweep_copy_secrets(staged: Path) -> None:
+    """Redact ``sbp_`` / ``eyJ`` secrets from the emergency snapshot COPY before publish
+    (sean-ops/t_1602bd9f, Option C). Fail-open and stdlib-safe: the hook is imported lazily
+    so this file still runs standalone (Desktop pre-flight) when app imports cannot load."""
+    try:
+        from hermes_state_sweep import sweep_secrets_from_copy
+        summary = sweep_secrets_from_copy(staged)
+        if summary.get("error"):
+            logger.warning("Secret sweep of %s failed (continuing): %s", staged, summary["error"])
+        elif summary.get("rows_redacted"):
+            logger.info(
+                "Secret sweep redacted %d row(s) across %d table(s) in %s",
+                summary["rows_redacted"], summary.get("tables", 0), staged,
+            )
+    except Exception as exc:  # fail-open: an unimportable hook must not break the snapshot
+        logger.warning("Secret sweep unavailable for %s: %s", staged, exc)
+
+
 def preflight_state_db(home: Path) -> dict:
     """Publish an emergency snapshot; do not prune recovery files on failure."""
     source = home / "state.db"
@@ -241,6 +259,10 @@ def preflight_state_db(home: Path) -> dict:
                 raise RuntimeError(f"SQLite snapshot integrity check failed: {result}")
         finally:
             connection.close()
+        # Option C: redact sbp_/eyJ secrets from the COPY so the emergency backup never
+        # freezes a secret that predates the transcript hook. Fail-open (never blocks the
+        # snapshot); the source state.db is untouched.
+        _sweep_copy_secrets(staged)
         size = staged.stat().st_size
         os.replace(staged, destination)
     finally:

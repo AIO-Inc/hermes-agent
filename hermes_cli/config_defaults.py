@@ -2355,6 +2355,10 @@ DEFAULT_CONFIG = {
         # bloated state.db) are skipped with a warning so the snapshot stays fast. This is the #48200
         # (wrong-path wipe) safety net.
         "pre_update_backup": "quick",
+        # Pre-update secret sweep (sean-ops/t_1602bd9f, Option C): redact sbp_/eyJ secrets
+        # from the backup/snapshot COPY of state.db so a backup never freezes a secret that
+        # predates the transcript hook. Fail-open (a sweep error never blocks the update).
+        "pre_update_secret_sweep": True,
         # Full backup zips to retain (older pruned after each success; floored to 1 so the newest is
         # always kept). The quick snapshot always keeps exactly 1.
         "backup_keep": 5,
