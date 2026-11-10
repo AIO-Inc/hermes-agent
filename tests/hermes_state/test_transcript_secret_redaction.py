@@ -17,7 +17,7 @@ import pytest
 from hermes_state import SessionDB
 from hermes_state_redaction import REDACT_MARKER, reset_redaction_cache
 
-SBP_SECRET = "sbp_" + "aB3xK9mQ2nV8pL4tR6wY0zC5dE7f"  # 44 chars total (40-char tail)
+SBP_SECRET = "sbp_" + "aB3xK9mQ2nV8pL4tR6wY0zC5dE7fGhJkL9pQrS2w"  # 44 chars total (40-char tail)
 JWT_SECRET = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
     "eyJzdWIiOiIxMjM0NTY3ODkwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSJ9."

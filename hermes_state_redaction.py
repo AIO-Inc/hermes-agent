@@ -32,9 +32,12 @@ REDACT_MARKER = "[REDACTED sean-ops/t_1602bd9f]"
 # Characters kept after the ``sbp_`` / ``eyJ`` prefix, for audit correlation.
 _AUDIT_KEEP_CHARS = 8
 
-# ``sbp_`` tokens: the prefix plus 16+ characters of the token alphabet. The length floor is
-# the false-positive guard — a short ``sbp_``-prefixed identifier never matches.
-_SBP_RE = re.compile(r"sbp_[A-Za-z0-9_-]{16,}")
+# ``sbp_`` tokens: the prefix plus EXACTLY 36-40 alphanumeric characters (Supabase management
+# PATs are ``sbp_`` + 40 chars = 44 total, with a 40-char / ``sbp_`` + 36 truncated variant).
+# Alphanumeric-only (no ``-``/``_``) plus the length bound and word boundaries are the
+# false-positive guard: prose like ``sbp_and_eyJ``, short ``sbp_foo``, mid-word ``sbp_`` and
+# raw-page FTS token concatenations never match.
+_SBP_RE = re.compile(r"\bsbp_[A-Za-z0-9]{36,40}\b")
 
 # A full compact JWT: ``eyJ…`` header, ``.``, payload, ``.``, signature — all base64url
 # segments (the standard Supabase / service-role shape). Matched before the bare pattern so
@@ -42,8 +45,11 @@ _SBP_RE = re.compile(r"sbp_[A-Za-z0-9_-]{16,}")
 _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}")
 
 # A bare/truncated ``eyJ`` token (JWT header prefix, or an ``eyJ`` value whose payload is not
-# clean base64url and so escapes the full-JWT pattern). Redacts the header at least.
-_BARE_EYJ_RE = re.compile(r"eyJ[A-Za-z0-9_-]{8,}")
+# clean base64url and so escapes the full-JWT pattern). Redacts the header at least. Minimum
+# 20 chars (real JWT headers are ~36 for HS256 / ~96 for HS512; a truncated persisted copy is
+# a prefix of one) and a hard 100-char ceiling so FTS token concatenations (hundreds of
+# base64url-ish bytes glued to ``eyJ`` in raw pages) never match.
+_BARE_EYJ_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{17,97}\b")
 
 # Config toggle. Default ON. Disable with ``sessions.transcript_secret_redaction: false`` in
 # config.yaml, or the env var ``HERMES_TRANSCRIPT_SECRET_REDACTION`` (0/off/false/no).
