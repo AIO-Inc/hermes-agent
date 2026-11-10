@@ -1725,11 +1725,77 @@ def task_graph_context(conn: sqlite3.Connection, task_id: str) -> dict:
 
 # --- Comments & events ---
 
+# RECON egress secret blocklist (fail-closed). Mirrors clef_ops/redact.py's
+# ``_BLOCKLIST`` verbatim (recon hardening: the desk brief -> kanban comment path
+# is an outbound egress surface, and a comment carrying a leaked token must be
+# REFUSED — never silently stripped). Keep in sync with clef_ops/redact.py:
+# bearer_token, openai_style_key, github_pat, github_oauth, long_hex_secret,
+# aws_access_key, private_key_pem.
+_RECON_SECRET_BLOCKLIST: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b", re.IGNORECASE), "bearer_token"),
+    (re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}\b"), "openai_style_key"),
+    (re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"), "github_pat"),
+    (re.compile(r"\bgho_[A-Za-z0-9]{20,}\b"), "github_oauth"),
+    (re.compile(r"\b[0-9a-fA-F]{32,}\b"), "long_hex_secret"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "aws_access_key"),
+    (re.compile(r"-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE KEY-----"), "private_key_pem"),
+)
+
+
+class CommentSecretRefused(ValueError):
+    """A comment on the recon board hit the fail-closed secret blocklist.
+
+    ``rule`` is the blocklist rule NAME only (e.g. ``openai_style_key``) — never
+    the matched token, which would itself be a leak. Subclasses ``ValueError`` so
+    existing generic handlers still surface it; the recon desk path can catch it
+    specifically and report the refusal without a partial post.
+    """
+
+    def __init__(self, rule: str) -> None:
+        self.rule = rule
+        super().__init__(
+            f"comment refused: recon egress secret gate blocked (rule '{rule}')"
+        )
+
+
+def _comment_blocked_rule(text: str) -> str | None:
+    """First blocklist rule name matching ``text``, else ``None``."""
+    for pattern, rule in _RECON_SECRET_BLOCKLIST:
+        if pattern.search(text):
+            return rule
+    return None
+
+
+def _conn_is_recon_board(conn: sqlite3.Connection) -> bool:
+    """True when ``conn`` is the recon board DB (the recon-desk-brief egress
+    surface). Resolves the live connection's main-db path and compares it to the
+    recon board path; any failure to resolve returns False (never a crash, and
+    never a false gate on a board we couldn't identify)."""
+    try:
+        db_path = ""
+        for _seq, name, file in conn.execute("PRAGMA database_list").fetchall():
+            if name == "main":
+                db_path = file or ""
+                break
+        if not db_path:
+            return False
+        return Path(db_path).resolve() == kanban_db_path(board="recon").resolve()
+    except Exception:
+        return False
+
+
 def add_comment(conn: sqlite3.Connection, task_id: str, author: str, body: str) -> int:
     if not body or not body.strip():
         raise ValueError("comment body is required")
     if not author or not author.strip():
         raise ValueError("comment author is required")
+    # Fail-closed secret gate, scoped to the recon board (recon-desk-brief ->
+    # kanban comment egress surface). A blocklist hit refuses the comment BEFORE
+    # any row is written — no partial post, no stripped token.
+    if _conn_is_recon_board(conn):
+        rule = _comment_blocked_rule(body)
+        if rule is not None:
+            raise CommentSecretRefused(rule)
     now = int(time.time())
     # ``allow_nested=True``: graph builders (kanban_swarm blackboard seeding)
     # compose comment writes under one outer commit.
