@@ -1248,6 +1248,10 @@ def create_task(
     model_override, provider_override = _validate_model_override(model_override, provider_override)
     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
     assignee = _canonical_assignee(assignee)
+    # Coordinator-roster gate (coordination boards): a card on a coordination
+    # board must carry a coordinator-roster assignee. Fail-closed — raises before
+    # any row is written. (Charter rule -> substrate guarantee.)
+    _enforce_coordinator_roster(conn, assignee)
     if not title or not title.strip():
         raise ValueError("title is required")
     if initial_status not in VALID_INITIAL_STATUSES:
@@ -1512,6 +1516,10 @@ def list_tasks(
 def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) -> bool:
     """Assign/reassign; raises RuntimeError while the task is running under a claim."""
     profile = _canonical_assignee(profile)
+    # Coordinator-roster gate (coordination boards): a coordination-board card
+    # may only be assigned/reassigned to a coordinator-roster member. Fail-closed
+    # — raises before any row is written. (Charter rule -> substrate guarantee.)
+    _enforce_coordinator_roster(conn, profile)
     with write_txn(conn):
         row = conn.execute(
             "SELECT status, claim_lock, assignee FROM tasks WHERE id = ?", (task_id,)
@@ -1807,6 +1815,164 @@ def add_comment(conn: sqlite3.Connection, task_id: str, author: str, body: str) 
         )
         _append_event(conn, task_id, "commented", {"author": author, "len": len(body)})
         return int(cur.lastrowid or 0)
+
+
+# --- Coordinator-roster gate (coordination boards, e.g. hive) ---
+
+# Per-board coordinator rosters: ``<root>/kanban/provenance-gate.json``. A board
+# listed under ``coordination_boards`` is a COORDINATION board — only its
+# coordinator roster may create/assign cards on it. This turns the charter rule
+# ("only coordinators cross the hive board") into a substrate guarantee: the
+# dispatcher otherwise resolves any assignee to a machine-global profile with no
+# per-board roster gate (its spawn predicate is ``profile_exists(assignee)`` and
+# ``kanban.dispatch_profiles`` has no allowlist), so a coordinator could fan a
+# hive-board order out onto the hive board itself and worker seats would pick up
+# hive-board cards. The roster is configurable per-board — never hardcoded in
+# code — via provenance-gate.json; the shipped default pins the hive board's
+# roster to henry + prowler.
+_PROVENANCE_GATE_DEFAULTS: dict[str, Any] = {
+    "coordination_boards": {
+        "hive": {"coordinators": ["henry", "prowler"]},
+    },
+}
+
+
+def provenance_gate_path() -> Path:
+    """``<root>/kanban/provenance-gate.json`` — per-board coordinator rosters."""
+    return kanban_home() / "kanban" / "provenance-gate.json"
+
+
+def _load_provenance_gate() -> dict[str, Any]:
+    """Coordinator-roster config merged over defaults. Never raises: a missing
+    or malformed file falls back to the defaults, so a broken config can never
+    silently OPEN a coordination board to arbitrary assignees — the default
+    roster stays the gate."""
+    from copy import deepcopy
+
+    cfg: dict[str, Any] = deepcopy(_PROVENANCE_GATE_DEFAULTS)
+    try:
+        p = provenance_gate_path()
+        if p.exists():
+            raw = json.loads(p.read_text(encoding="utf-8-sig"))
+            if isinstance(raw, dict):
+                boards = raw.get("coordination_boards")
+                if isinstance(boards, dict):
+                    merged = cfg.setdefault("coordination_boards", {})
+                    for slug, entry in boards.items():
+                        try:
+                            normed = _normalize_board_slug(slug)
+                        except ValueError:
+                            continue
+                        if not normed:
+                            continue
+                        if isinstance(entry, list):
+                            entry = {"coordinators": entry}
+                        if not isinstance(entry, dict):
+                            continue
+                        coordinators = entry.get("coordinators")
+                        roster: list[str] = []
+                        if isinstance(coordinators, list):
+                            for c in coordinators:
+                                if isinstance(c, str) and c.strip():
+                                    try:
+                                        normed_name = _canonical_assignee(c)
+                                        if normed_name:
+                                            roster.append(normed_name)
+                                    except ValueError:
+                                        pass
+                        merged[normed] = {
+                            "coordinators": roster,
+                            "coordinator_only": bool(entry.get("coordinator_only", True)),
+                        }
+    except (OSError, json.JSONDecodeError):
+        pass
+    return cfg
+
+
+def _board_coordinator_roster(slug: str) -> Optional[list[str]]:
+    """Coordinator roster for a coordination board, else ``None`` (not a
+    coordination board). A listed board is coordinator-only unless its entry sets
+    ``coordinator_only: false``. An empty roster is still returned as ``[]`` so
+    the enforcement fails CLOSED (no one may assign) rather than silently
+    opening a misconfigured coordination board."""
+    boards = _load_provenance_gate().get("coordination_boards")
+    if not isinstance(boards, dict):
+        return None
+    try:
+        normed = _normalize_board_slug(slug)
+    except ValueError:
+        return None
+    entry = boards.get(normed or "")
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("coordinator_only", True) is False:
+        return None
+    roster = entry.get("coordinators") or []
+    return [r for r in roster if isinstance(r, str) and r]
+
+
+def _conn_coordination_roster(conn: sqlite3.Connection) -> Optional[tuple[str, list[str]]]:
+    """``(slug, roster)`` when ``conn`` is a coordination board, else ``None``.
+
+    Resolves the live connection's main-db path and matches it against each
+    coordination board's resolved DB path; any failure to resolve returns
+    ``None`` (never a crash, never a false gate on a board we couldn't
+    identify) — the same shape as :func:`_conn_is_recon_board`."""
+    try:
+        db_path = ""
+        for _seq, name, file in conn.execute("PRAGMA database_list").fetchall():
+            if name == "main":
+                db_path = file or ""
+                break
+        if not db_path:
+            return None
+        resolved = Path(db_path).resolve()
+        boards = _load_provenance_gate().get("coordination_boards") or {}
+        for slug in boards:
+            roster = _board_coordinator_roster(slug)
+            if roster is None:
+                continue
+            if resolved == kanban_db_path(board=slug).resolve():
+                return slug, roster
+    except Exception:
+        return None
+    return None
+
+
+class CoordinatorRosterRefused(ValueError):
+    """A card on a coordination board would carry a non-roster assignee.
+
+    Subclasses ``ValueError`` so existing generic handlers still surface it;
+    coordinator/desk paths can catch it specifically and report the refusal
+    without a partial write. Carries ``board``/``assignee``/``roster`` so the
+    caller can explain the refusal (never the config file contents)."""
+
+    def __init__(self, board: str, assignee: str, roster: list[str]) -> None:
+        self.board = board
+        self.assignee = assignee
+        self.roster = roster
+        super().__init__(
+            f"refused: '{assignee}' is not in the coordinator roster for the "
+            f"coordination board '{board}' (roster: {', '.join(roster)}). "
+            "Only coordinators may create/assign cards on a coordination board — "
+            "spawn follow-up work on the worker board instead."
+        )
+
+
+def _enforce_coordinator_roster(conn: sqlite3.Connection, assignee: Optional[str]) -> None:
+    """Fail-closed: a card created/assigned on a coordination board must carry a
+    coordinator-roster assignee. Raises ``CoordinatorRosterRefused`` BEFORE any
+    row is written — no partial card, no silently-relocated assignee. A ``None``
+    assignee (unassign) is never gated."""
+    if assignee is None:
+        return
+    gate = _conn_coordination_roster(conn)
+    if gate is None:
+        return
+    slug, roster = gate
+    canonical = _canonical_assignee(assignee) or str(assignee)
+    if canonical not in roster:
+        raise CoordinatorRosterRefused(slug, canonical, roster)
 
 
 def _require_task(conn: sqlite3.Connection, task_id: str) -> None:

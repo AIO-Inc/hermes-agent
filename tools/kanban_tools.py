@@ -298,6 +298,42 @@ def _worker_guard(tool_name: str, args: dict) -> str:
     return tid
 
 
+def _coordinator_cross_card_attach_allowed(tid: str, board: Optional[str]) -> bool:
+    """A coordinator (roster member) may attach to a DIFFERENT card on the same
+    coordination board — the cross-org report handoff. True only when the target
+    board is a coordination board AND the caller's persisted identity is in that
+    board's coordinator roster. False (fail-closed) otherwise: the caller stays
+    task-scoped. Identity is resolved from the runtime profile (never tool args),
+    so a prompt-injected worker cannot forge coordinator standing."""
+    try:
+        from hermes_cli import kanban_db as kb
+        identity = kb._canonical_assignee(_persisted_identity())
+        with _board(board, quiet_close=True) as (kb, conn):
+            gate = kb._conn_coordination_roster(conn)
+            if gate is None:
+                return False
+            _slug, roster = gate
+            return identity in roster
+    except Exception:
+        return False
+
+
+def _attach_guard(tool_name: str, args: dict) -> str:
+    """Attach preamble: delegate-child rejection, task resolution, and task-scope
+    ownership — EXCEPT a coordinator may attach cross-card onto its own
+    coordination board (the cross-org report handoff). Everyone else stays
+    task-scoped (fail-closed). Returns the target task id."""
+    _reject_delegated_child_mutation(tool_name)
+    tid = _require_task_id(args)
+    env_tid = os.environ.get("HERMES_KANBAN_TASK")
+    if env_tid and tid != env_tid and not _coordinator_cross_card_attach_allowed(tid, args.get("board")):
+        raise _Reject(
+            f"worker is scoped to task {env_tid}; refusing to mutate {tid}. Use kanban_comment "
+            f"to hand off information to other tasks, or kanban_create to spawn follow-up work. "
+            f"(A coordinator may attach a report cross-card onto its own coordination board.)")
+    return tid
+
+
 def _require_orchestrator_tool(tool_name: str) -> None:
     """The check_fn already hides orchestrator tools from workers; this catches
     a stale registration or test harness routing a worker here anyway."""
@@ -1006,7 +1042,7 @@ def _store_attachment(board, tid, filename, data, content_type) -> str:
 @_kanban_handler("kanban_attach")
 def _handle_attach(args: dict, **kw) -> str:
     """Attach an inline (base64) file to a task."""
-    tid = _worker_guard("kanban_attach", args)
+    tid = _attach_guard("kanban_attach", args)
     filename = _require_text(args, "filename")
     content_b64 = _require_text(args, "content_base64")
     import base64
@@ -1063,7 +1099,7 @@ def _download_url_with_cap(url: str, max_bytes: int) -> tuple[bytes, Optional[st
 def _handle_attach_url(args: dict, **kw) -> str:
     """Attach a file fetched server-side from an http(s) URL (shared size cap)."""
     from hermes_cli import kanban_db as kb
-    tid = _worker_guard("kanban_attach_url", args)
+    tid = _attach_guard("kanban_attach_url", args)
     url = str(_require_text(args, "url")).strip()
     filename = args.get("filename") or args.get("title")
     if not filename or not str(filename).strip():
